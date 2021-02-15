@@ -30,7 +30,7 @@ class CvMLPClassifierDataGenerator:
             train_x.append(x)
 
             dir_name = cur_img_path.replace('\\', '/').split('/')[-2]
-            y = [0.0 for _ in range(len(self.class_names))]
+            y = [-1.0 for _ in range(len(self.class_names))]
             if dir_name != 'unknown':
                 y[self.class_names.index(dir_name)] = 1.0
             train_y.append(y)
@@ -73,14 +73,14 @@ def main():
         class_names=class_names,
         input_size=(16, 32),
         channels=1,
-        num_train_samples_per_epoch=50000)
+        num_train_samples_per_epoch=1000)
 
     model = cv2.ml.ANN_MLP_create()
     layer_sizes = np.asarray([512, 256, 46])
     model.setLayerSizes(layer_sizes)
     model.setTermCriteria((cv2.TERM_CRITERIA_EPS, -1, 0.1))
     model.setTrainMethod(cv2.ml.ANN_MLP_BACKPROP)
-    model.setActivationFunction(cv2.ml.ANN_MLP_SIGMOID_SYM)
+    model.setActivationFunction(cv2.ml.ANN_MLP_SIGMOID_SYM, 1.0, 1.0)
     model.setBackpropWeightScale(lr)
 
     for epoch in range(epochs):
