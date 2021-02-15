@@ -1,9 +1,45 @@
 import os
 import random
+from concurrent.futures.thread import ThreadPoolExecutor
 from glob import glob
 
 import numpy as np
 from cv2 import cv2
+
+
+class CvMLPClassifierDataGenerator:
+    def __init__(self, image_paths, class_names, input_size, channels, num_train_samples_per_epoch):
+        self.image_paths = image_paths
+        self.class_names = class_names
+        self.input_size = input_size
+        self.channels = channels
+        self.num_train_samples_per_epoch = num_train_samples_per_epoch
+        self.pool = ThreadPoolExecutor(8)
+
+    def next(self):
+        random.shuffle(self.image_paths)
+        train_x = []
+        train_y = []
+        fs = []
+        for i in range(self.num_train_samples_per_epoch):
+            fs.append(self.pool.submit(self.__load_img, self.image_paths[i]))
+        for f in fs:
+            cur_img_path, x = f.result()
+            x = cv2.resize(x, self.input_size)
+            x = np.asarray(x).reshape(-1).astype('float32') / 255.0
+            train_x.append(x)
+
+            dir_name = cur_img_path.replace('\\', '/').split('/')[-2]
+            y = [0.0 for _ in range(len(self.class_names))]
+            if dir_name != 'unknown':
+                y[self.class_names.index(dir_name)] = 1.0
+            train_y.append(y)
+        train_x = np.asarray(train_x).astype('float32')
+        train_y = np.asarray(train_y).astype('float32')
+        return cv2.ml.TrainData_create(train_x, cv2.ml.ROW_SAMPLE, train_y)
+
+    def __load_img(self, path):
+        return path, cv2.imread(path, cv2.IMREAD_GRAYSCALE if self.channels == 1 else cv2.IMREAD_COLOR)
 
 
 def main():
@@ -11,6 +47,7 @@ def main():
     validation_split = 0.2
     input_size = (16, 32)
     lr = 1e-4
+    epochs = 300
 
     train_image_path = train_image_path.replace('\\', '/')
     dir_paths = glob(f'{train_image_path}/*')
@@ -29,25 +66,14 @@ def main():
             train_image_paths += class_image_paths[:num_train_images]
             validation_image_paths += class_image_paths[num_train_images:]
 
-    class_names = list(class_name_set)
-    train_image_paths = train_image_paths[:500]
-    train_x = []
-    train_y = []
-    for path in train_image_paths:
-        x = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
-        x = cv2.resize(x, input_size)
-        x = np.asarray(x).reshape((input_size[0] * input_size[1])).astype('float32') / 255.0
-        train_x.append(x)
+    class_names = sorted(list(class_name_set))
 
-        dir_name = path.replace('\\', '/').split('/')[-2]
-        y = [0.0 for _ in range(len(class_names))]
-        if dir_name != 'unknown':
-            y[class_names.index(dir_name)] = 1.0
-        train_y.append(y)
-
-    train_x = np.asarray(train_x).astype('float32')
-    train_y = np.asarray(train_y).astype('float32')
-    train_data = cv2.ml.TrainData_create(train_x, cv2.ml.ROW_SAMPLE, train_y)
+    train_data_generator = CvMLPClassifierDataGenerator(
+        image_paths=train_image_paths,
+        class_names=class_names,
+        input_size=(16, 32),
+        channels=1,
+        num_train_samples_per_epoch=50000)
 
     model = cv2.ml.ANN_MLP_create()
     layer_sizes = np.asarray([512, 256, 46])
@@ -57,7 +83,12 @@ def main():
     model.setActivationFunction(cv2.ml.ANN_MLP_SIGMOID_SYM)
     model.setBackpropWeightScale(lr)
 
-    model.train(train_data, cv2.ml.ANN_MLP_NO_INPUT_SCALE + cv2.ml.ANN_MLP_NO_OUTPUT_SCALE)
+    for epoch in range(epochs):
+        if epoch == 0:
+            model.train(train_data_generator.next(), cv2.ml.ANN_MLP_NO_INPUT_SCALE + cv2.ml.ANN_MLP_NO_OUTPUT_SCALE)
+        else:
+            model.train(train_data_generator.next(), cv2.ml.ANN_MLP_NO_INPUT_SCALE + cv2.ml.ANN_MLP_NO_OUTPUT_SCALE + cv2.ml.ANN_MLP_UPDATE_WEIGHTS)
+        print('success')
 
 
 if __name__ == '__main__':
