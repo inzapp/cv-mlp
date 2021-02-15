@@ -7,7 +7,7 @@ import numpy as np
 from cv2 import cv2
 
 
-class CvMLPClassifierDataGenerator:
+class CvMLPImageClassificationDynamicDataLoader:
     def __init__(self, image_paths, class_names, input_size, channels, num_train_samples_per_epoch):
         self.image_paths = image_paths
         self.class_names = class_names
@@ -36,7 +36,7 @@ class CvMLPClassifierDataGenerator:
             train_y.append(y)
         train_x = np.asarray(train_x).astype('float32')
         train_y = np.asarray(train_y).astype('float32')
-        return cv2.ml.TrainData_create(train_x, cv2.ml.ROW_SAMPLE, train_y)
+        return train_x, train_y
 
     def __load_img(self, path):
         return path, cv2.imread(path, cv2.IMREAD_GRAYSCALE if self.channels == 1 else cv2.IMREAD_COLOR)
@@ -68,12 +68,25 @@ def main():
 
     class_names = sorted(list(class_name_set))
 
-    train_data_generator = CvMLPClassifierDataGenerator(
+    load_type = 'dynamic'  # or static
+
+    data_loader = CvMLPImageClassificationDynamicDataLoader(
         image_paths=train_image_paths,
         class_names=class_names,
         input_size=(16, 32),
         channels=1,
         num_train_samples_per_epoch=1000)
+
+    train_data = object()
+    if load_type == 'static':
+        loader = CvMLPImageClassificationDynamicDataLoader(
+            image_paths=train_image_paths,
+            class_names=class_names,
+            input_size=(16, 32),
+            channels=1,
+            num_train_samples_per_epoch=len(train_image_paths))
+        train_x, train_y = loader.next()
+        train_data = cv2.ml.TrainData_create(train_x, cv2.ml.ROW_SAMPLE, train_y)
 
     model = cv2.ml.ANN_MLP_create()
     layer_sizes = np.asarray([512, 256, 46])
@@ -84,10 +97,13 @@ def main():
     model.setBackpropWeightScale(lr)
 
     for epoch in range(epochs):
+        if load_type == 'dynamic':
+            train_x, train_y = data_loader.next()
+            train_data = cv2.ml.TrainData_create(train_x, cv2.ml.ROW_SAMPLE, train_y)
         if epoch == 0:
-            model.train(train_data_generator.next(), cv2.ml.ANN_MLP_NO_INPUT_SCALE + cv2.ml.ANN_MLP_NO_OUTPUT_SCALE)
+            model.train(train_data, cv2.ml.ANN_MLP_NO_INPUT_SCALE + cv2.ml.ANN_MLP_NO_OUTPUT_SCALE)
         else:
-            model.train(train_data_generator.next(), cv2.ml.ANN_MLP_NO_INPUT_SCALE + cv2.ml.ANN_MLP_NO_OUTPUT_SCALE + cv2.ml.ANN_MLP_UPDATE_WEIGHTS)
+            model.train(train_data, cv2.ml.ANN_MLP_NO_INPUT_SCALE + cv2.ml.ANN_MLP_NO_OUTPUT_SCALE + cv2.ml.ANN_MLP_UPDATE_WEIGHTS)
         print('success')
 
 
