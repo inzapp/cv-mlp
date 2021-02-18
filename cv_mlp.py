@@ -7,7 +7,7 @@ import numpy as np
 from cv2 import cv2
 
 
-class CvMLPImageClassificationDynamicDataLoader:
+class DynamicDataLoader:
     def __init__(self, image_paths, class_names, input_size, channels, num_train_samples_per_epoch):
         self.image_paths = image_paths
         self.class_names = class_names
@@ -42,12 +42,42 @@ class CvMLPImageClassificationDynamicDataLoader:
         return path, cv2.imread(path, cv2.IMREAD_GRAYSCALE if self.channels == 1 else cv2.IMREAD_COLOR)
 
 
+def evaluate_using_static_data(model, train_data):
+    train_x = train_data.getSamples()
+    y_true = train_data.getResponses()
+    y_pred = []
+    for i in range(len(train_x)):
+        y = model.precict(train_x[i])
+        print(y)
+    loss = 0
+    recall = 0
+    return loss, recall
+
+
+def evaluate_using_image_paths(model, image_paths):
+    loss = 0
+    recall = 0
+    return loss, recall
+
+
+def evaluate(model, evaluate_data):
+    if type(evaluate_data) is list:
+        return evaluate_using_image_paths(model, evaluate_data)
+    return evaluate_using_static_data(model, evaluate_data)
+
+
 def main():
-    train_image_path = r'C:\inz\train_data\ocr_b1'
+    train_image_path = r'C:\inz\train_data\test_ocr_b1'
     validation_split = 0.2
     input_size = (16, 32)
+    channels = 1
+    hidden_layer_units = [256]
     lr = 1e-4
+    momentum = 0.1
     epochs = 300
+    num_train_samples_per_epoch = 10000
+    load_type = 'static'  # dynamic, static
+    pretrained_model_path = ''
 
     train_image_path = train_image_path.replace('\\', '/')
     dir_paths = glob(f'{train_image_path}/*')
@@ -67,44 +97,74 @@ def main():
             validation_image_paths += class_image_paths[num_train_images:]
 
     class_names = sorted(list(class_name_set))
-
-    load_type = 'dynamic'  # or static
-
-    data_loader = CvMLPImageClassificationDynamicDataLoader(
+    data_loader = DynamicDataLoader(
         image_paths=train_image_paths,
         class_names=class_names,
-        input_size=(16, 32),
-        channels=1,
-        num_train_samples_per_epoch=1000)
+        input_size=input_size,
+        channels=channels,
+        num_train_samples_per_epoch=num_train_samples_per_epoch)
 
     train_data = object()
+    validation_data = object()
     if load_type == 'static':
-        loader = CvMLPImageClassificationDynamicDataLoader(
+        all_data_loader = DynamicDataLoader(
             image_paths=train_image_paths,
             class_names=class_names,
-            input_size=(16, 32),
-            channels=1,
+            input_size=input_size,
+            channels=channels,
             num_train_samples_per_epoch=len(train_image_paths))
-        train_x, train_y = loader.next()
+        train_x, train_y = all_data_loader.next()
         train_data = cv2.ml.TrainData_create(train_x, cv2.ml.ROW_SAMPLE, train_y)
 
+        if len(validation_image_paths) > 0:
+            all_data_loader = DynamicDataLoader(
+                image_paths=validation_image_paths,
+                class_names=class_names,
+                input_size=input_size,
+                channels=channels,
+                num_train_samples_per_epoch=len(validation_image_paths))
+            train_x, train_y = all_data_loader.next()
+            validation_data = cv2.ml.TrainData_create(train_x, cv2.ml.ROW_SAMPLE, train_y)
+
+    num_features = input_size[0] * input_size[1] * channels
+    num_classes = len(class_names)
+    layer_sizes = np.asarray([num_features] + hidden_layer_units + [num_classes])
+    print(layer_sizes)
+
     model = cv2.ml.ANN_MLP_create()
-    layer_sizes = np.asarray([512, 256, 46])
     model.setLayerSizes(layer_sizes)
     model.setTermCriteria((cv2.TERM_CRITERIA_EPS, -1, 0.1))
     model.setTrainMethod(cv2.ml.ANN_MLP_BACKPROP)
     model.setActivationFunction(cv2.ml.ANN_MLP_SIGMOID_SYM, 1.0, 1.0)
     model.setBackpropWeightScale(lr)
+    model.setBackpropMomentumScale(momentum)
 
+    max_recall = 0.0
+    max_val_recall = 0.0
     for epoch in range(epochs):
-        if load_type == 'dynamic':
+        print(f'\nepoch {epoch + 1} / {epochs}')
+        if load_type != 'static':
             train_x, train_y = data_loader.next()
             train_data = cv2.ml.TrainData_create(train_x, cv2.ml.ROW_SAMPLE, train_y)
         if epoch == 0:
             model.train(train_data, cv2.ml.ANN_MLP_NO_INPUT_SCALE + cv2.ml.ANN_MLP_NO_OUTPUT_SCALE)
         else:
             model.train(train_data, cv2.ml.ANN_MLP_NO_INPUT_SCALE + cv2.ml.ANN_MLP_NO_OUTPUT_SCALE + cv2.ml.ANN_MLP_UPDATE_WEIGHTS)
-        print('success')
+        loss, recall = evaluate(model, train_data)
+        if len(validation_image_paths) > 0:
+            if load_type == 'static':
+                val_loss, val_recall = evaluate(model, validation_data)
+            else:
+                val_loss, val_recall = evaluate(model, validation_image_paths)
+            if val_recall > max_val_recall:
+                max_val_recall = val_recall
+                model.save(f'checkpoints/epoch_{epoch + 1}_loss_{loss:.4f}_val_loss_{val_loss:.4f}_recall_{recall:.4f}_val_recall_{val_recall:.4f}.xml')
+            print(f'loss : {loss:.4f}, val_loss : {val_loss:.4f}, recall : {recall:.4f}, val_recall : {val_recall:.4f}')
+        else:
+            if recall > max_recall:
+                max_recall = recall
+                model.save(f'checkpoints/epoch_{epoch + 1}_loss_{loss:.4f}_recall_{recall:.4f}.xml')
+            print(f'loss : {loss:.4f}, recall : {recall:.4f}')
 
 
 if __name__ == '__main__':
