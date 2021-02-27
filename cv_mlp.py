@@ -42,16 +42,32 @@ class DynamicDataLoader:
         return path, cv2.imread(path, cv2.IMREAD_GRAYSCALE if self.channels == 1 else cv2.IMREAD_COLOR)
 
 
+def metric(y_true, y_pred):
+    # normalize to 0 ~ 1
+    for i in range(len(y_true)):
+        y_true[i] = (y_true[i] + 1.0) / 2.0
+    for i in range(len(y_pred)):
+        y_true[i] = (y_pred[i] + 1.0) / 2.0
+
+    tp = 0.0
+    for i in range(len(y_true)):
+        max_y_true_index = np.where(y_true[i] == np.max(y_true[i]))
+        max_y_pred_index = np.where(y_pred[i] == np.max(y_pred[i]))
+        if max_y_true_index == max_y_pred_index:
+            tp += y_pred[i][max_y_pred_index]
+    loss = np.sum(np.abs(y_true - y_pred)) / (len(y_pred) * len(y_pred[0]))
+    p = tp / (np.sum(y_pred * y_true) + 1e-5)
+    r = tp / (np.sum(y_true) + 1e-5)
+    f1 = (p * r * 2.0) / (p + r + 1e-5)
+    return float(loss), float(f1)
+
+
 def evaluate_using_static_data(model, train_data):
     train_x = train_data.getSamples()
     y_true = train_data.getResponses()
-    y_pred = []
-    for i in range(len(train_x)):
-        y = model.precict(train_x[i])
-        print(y)
-    loss = 0
-    recall = 0
-    return loss, recall
+    ret, y_pred = model.predict(train_x)
+    loss, f1 = metric(y_true, y_pred)
+    return loss, f1
 
 
 def evaluate_using_image_paths(model, image_paths):
@@ -67,17 +83,17 @@ def evaluate(model, evaluate_data):
 
 
 def main():
-    train_image_path = r'C:\inz\train_data\test_ocr_b1'
+    train_image_path = r'C:\inz\train_data\mnist'
     validation_split = 0.2
-    input_size = (16, 32)
-    channels = 1
-    hidden_layer_units = [256]
+    input_size = (28, 28)
+    channels = 1  # 1 : grayscale, else : bgr
+    hidden_layer_units = [256]  # num hidden layer sizes
     lr = 1e-4
     momentum = 0.1
     epochs = 300
-    num_train_samples_per_epoch = 10000
+    num_train_samples_per_epoch = 10000  # cpu batch size
     load_type = 'static'  # dynamic, static
-    pretrained_model_path = ''
+    pretrained_model_path = ''  # use this if train a pretrained model
 
     train_image_path = train_image_path.replace('\\', '/')
     dir_paths = glob(f'{train_image_path}/*')
@@ -131,13 +147,16 @@ def main():
     layer_sizes = np.asarray([num_features] + hidden_layer_units + [num_classes])
     print(layer_sizes)
 
-    model = cv2.ml.ANN_MLP_create()
-    model.setLayerSizes(layer_sizes)
-    model.setTermCriteria((cv2.TERM_CRITERIA_EPS, -1, 0.1))
-    model.setTrainMethod(cv2.ml.ANN_MLP_BACKPROP)
-    model.setActivationFunction(cv2.ml.ANN_MLP_SIGMOID_SYM, 1.0, 1.0)
-    model.setBackpropWeightScale(lr)
-    model.setBackpropMomentumScale(momentum)
+    if pretrained_model_path == '':
+        model = cv2.ml.ANN_MLP_create()
+        model.setLayerSizes(layer_sizes)
+        model.setTermCriteria((cv2.TERM_CRITERIA_EPS, -1, 0.1))
+        model.setTrainMethod(cv2.ml.ANN_MLP_BACKPROP)
+        model.setActivationFunction(cv2.ml.ANN_MLP_SIGMOID_SYM, 1.0, 1.0)
+        model.setBackpropWeightScale(lr)
+        model.setBackpropMomentumScale(momentum)
+    else:
+        model = cv2.ml.ANN_MLP_load(pretrained_model_path)
 
     max_recall = 0.0
     max_val_recall = 0.0
@@ -150,7 +169,8 @@ def main():
             model.train(train_data, cv2.ml.ANN_MLP_NO_INPUT_SCALE + cv2.ml.ANN_MLP_NO_OUTPUT_SCALE)
         else:
             model.train(train_data, cv2.ml.ANN_MLP_NO_INPUT_SCALE + cv2.ml.ANN_MLP_NO_OUTPUT_SCALE + cv2.ml.ANN_MLP_UPDATE_WEIGHTS)
-        loss, recall = evaluate(model, train_data)
+
+        loss, f1 = evaluate(model, train_data)
         if len(validation_image_paths) > 0:
             if load_type == 'static':
                 val_loss, val_recall = evaluate(model, validation_data)
@@ -158,13 +178,13 @@ def main():
                 val_loss, val_recall = evaluate(model, validation_image_paths)
             if val_recall > max_val_recall:
                 max_val_recall = val_recall
-                model.save(f'checkpoints/epoch_{epoch + 1}_loss_{loss:.4f}_val_loss_{val_loss:.4f}_recall_{recall:.4f}_val_recall_{val_recall:.4f}.xml')
-            print(f'loss : {loss:.4f}, val_loss : {val_loss:.4f}, recall : {recall:.4f}, val_recall : {val_recall:.4f}')
+                model.save(f'checkpoints/epoch_{epoch + 1}_loss_{loss:.4f}_val_loss_{val_loss:.4f}_recall_{f1:.4f}_val_recall_{val_recall:.4f}.xml')
+            print(f'loss : {loss:.4f}, val_loss : {val_loss:.4f}, recall : {f1:.4f}, val_recall : {val_recall:.4f}')
         else:
-            if recall > max_recall:
-                max_recall = recall
-                model.save(f'checkpoints/epoch_{epoch + 1}_loss_{loss:.4f}_recall_{recall:.4f}.xml')
-            print(f'loss : {loss:.4f}, recall : {recall:.4f}')
+            if f1 > max_recall:
+                max_recall = f1
+                model.save(f'checkpoints/epoch_{epoch + 1}_loss_{loss:.4f}_recall_{f1:.4f}.xml')
+            print(f'loss : {loss:.4f}, recall : {f1:.4f}')
 
 
 if __name__ == '__main__':
